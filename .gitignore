@@ -1,0 +1,15 @@
+# Game files and anything extracted/converted from them are copyrighted.
+# Never commit them.
+*.iso
+*.xiso
+assets_x.dat*
+extracted/
+output/
+
+# Build artifacts (publish the zip as a GitHub Release asset instead)
+dist/
+
+# Python / Blender
+__pycache__/
+*.pyc
+*.blend1

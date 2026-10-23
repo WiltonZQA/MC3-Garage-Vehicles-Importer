@@ -1,0 +1,14 @@
+schema_version = "1.0.0"
+
+id = "io_import_mc3"
+version = "1.0.0"
+name = "Midnight Club 3 Importer"
+tagline = "Import garages and traffic vehicles from MC3 Remix (Xbox)"
+maintainer = "MC3 Importer contributors"
+type = "add-on"
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+tags = ["Import-Export"]
+
+[permissions]
+files = "Read the game ISO / files selected by the user"
