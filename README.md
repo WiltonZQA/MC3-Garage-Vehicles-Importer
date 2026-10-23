@@ -5,6 +5,7 @@ A Blender add-on and a set of Python tools that import the **garages** and **tra
 It was made to build dioramas and renders of the game's garages.
 
 ![Tokyo garage, cutaway view](docs/images/tokyo_garage.png)
+![Tokyo garage, render example](docs/images/Render.jpg)
 
 > [!IMPORTANT]
 > **Disclaimer.** This is an unofficial, non-commercial fan project made as a hobby. It is **not affiliated with, endorsed by or connected to** Rockstar Games, Take-Two Interactive or any of the game's developers or publishers. *Midnight Club* and all related names, models and textures are the property of their respective owners.
