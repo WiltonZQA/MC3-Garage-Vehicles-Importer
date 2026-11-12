@@ -20,7 +20,8 @@ class Texture:
 class Material:
     """alpha: what the diffuse texture's alpha means in the game shader.
 
-    "OPAQUE" (ignored: reflection mask etc.), "MASK" (cutout) or "BLEND".
+    "OPAQUE" (ignored: reflection mask etc.), "MASK" (cutout), "BLEND" or
+    "REFLECT" (opaque surface; alpha is how much of the reflection shows).
     """
 
     def __init__(self, name, diffuse, lightmap, shader, alpha="OPAQUE", alpha_cutoff=0.5):
@@ -30,7 +31,11 @@ class Material:
 
 # Garages: alpha is a cutout only in the scenery shaders; in the car and chrome
 # shaders (6, 32-37) it is a reflection mask. Shader 5 is an additive glow.
-GARAGE_ALPHA = {None: "MASK", 30: "MASK", 31: "MASK", 5: "BLEND"}
+# Shader 31 (garage_lightmap_subtract_reflectingground) is the floor: drawn
+# opaque (One/Zero), its alpha goes to the framebuffer and later sets how much
+# of the mirrored copy of the room (*_reflect* object) is blended over it.
+GARAGE_ALPHA = {None: "MASK", 30: "MASK", 31: "REFLECT", 5: "BLEND"}
+REFLECTION_MESH = "_reflect"  # name fragment of the mirrored copy of the room under the floor
 
 
 class Mesh:

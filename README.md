@@ -1,4 +1,4 @@
-# MC3 Garage-Vehicles Importer
+# MC3 Garage/vehicles Importer
 
 A Blender add-on and a set of Python tools that import the **garages** and **traffic vehicles** of *Midnight Club 3: DUB Edition Remix* (original Xbox) from your own copy of the game, with textures, lightmaps and the game's baked lighting. It can also convert them to glTF (`.glb`) for use in any other 3D program.
 
@@ -52,6 +52,9 @@ All importers live under **File › Import › Midnight Club 3**.
    - **Time of day** and **Weather**. They only change the baked lighting.
    - **Shading**: *Game lighting (baked)* or *PBR*.
    - **Lighting strength**: 2.0 by default, matching the Xbox's 2× modulation.
+   - **Floor reflection**: multiplies the floor's reflection (1.0 = as in the game, 0 = matte floor). It is a real reflection, so it also shows anything you add, such as a car. In EEVEE, enable *Raytracing* in the render settings to see it.
+   - **Hide game reflection copy**: hides the mirrored copy of the room that the game puts under the floor (on by default).
+   - **Texture folder**: where the textures are saved as PNG. If left empty, they go to `mc3_textures/` next to the `.blend` (save the `.blend` before importing), or next to the game files if the `.blend` has not been saved yet.
 
 Each garage is imported into its own collection, under an empty named after the garage.
 
@@ -62,10 +65,10 @@ Each garage is imported into its own collection, under an empty named after the 
 | Object | Contents | Diorama tip |
 |---|---|---|
 | `*_prop_garage_x` and walls/roof pieces | Main room: walls, ceiling, posters | Keep |
-| `*_prop_garage_floor*` | Floor. Semi-transparent, because of the fake reflection below. | Keep. Remove the alpha for a solid floor. |
+| `*_prop_garage_floor*` | Floor. Opaque, with a real glossy reflection whose strength comes from the texture (as in the game). | Keep |
 | props, tires, railings, decals… | Tools, parts, shelves | Keep |
 | `*_prop_garage_skyline_x` and others | Background cars (Nissan Skyline in San Diego, Infiniti and others in Tokyo) | Keep |
-| `*_reflect*` / `*_reflection*` | Mirrored copy of the props under the floor. This is how the game fakes floor reflections. | **Hide** |
+| `*_reflect*` / `*_reflection*` | Mirrored copy of the room under the floor. This is how the game fakes floor reflections. | Hidden by default (not needed) |
 | `*_hdr*` | Additive glows and halos | Optional |
 
 The garage walls only have inward-facing faces, as in the game. Enable **Backface Culling** in the material settings to get a cutaway view that looks like a diorama.
@@ -86,8 +89,16 @@ Vehicles default to **PBR** shading. In the game their lighting is computed in r
 
 Because the garage materials are emissive in *baked* mode, the garage itself lights anything you put inside it when you render with **Cycles**. Import a garage, import a vehicle, move it into place and render.
 
-- **Contact shadows and real floor reflections:** switch the floor material to a Principled BSDF that uses the baked texture as *Base Color*, then add a couple of weak area lights under the ceiling lamps.
+- **Floor reflections:** the floor already reflects the vehicle (see *Floor reflection* above).
+- **Contact shadows:** switch the floor material to a Principled BSDF that uses the baked texture as *Base Color*, then add a couple of weak area lights under the ceiling lamps.
 - **EEVEE:** works too with *Raytracing* enabled, but emissive surfaces contribute less light than in Cycles.
+
+### Exporting from Blender to other formats
+
+Imported models can be exported with Blender's own exporters (OBJ, FBX, glTF…) and keep their diffuse textures. Use **Path Mode: Copy** for OBJ, and also enable **Embed Textures** (the box icon next to it) for FBX.
+
+- The textures are external PNG files (see *Texture folder* above), so the `.blend` needs that folder. To make the `.blend` self-contained, use **File › External Data › Pack Resources**.
+- Exporters only understand plain materials, so each material also has a simple Principled BSDF, connected to a Material Output set to **All**. Cycles and EEVEE use their own outputs, so the render does not change. The baked lighting (lightmap × vertex color) is not exported, only the diffuse texture.
 
 ## Command-line tools (no Blender needed)
 
@@ -113,7 +124,7 @@ In the `.glb` files, the lightmap is stored as an *occlusion texture* on UV 1, b
 
 - **Player cars:** the cars you drive are not supported yet. They use a different set of files.
 - **Traffic car paint:** the game tints some civilian cars with a random paint color at runtime. They are imported with the texture's own color.
-- **Reflections:** car reflections and environment maps are approximated: glass becomes a dark, slightly transparent material.
+- **Reflections:** environment maps are approximated: chrome parts (tanker tanks, fuel tanks, bumpers) become a light, glossy metal.
 - **Tested edition:** only the North American *Remix* release for the original Xbox (`Midnight Club 3 - DUB Edition Remix (USA)`) has been tested. Other regions or platforms (PS2, PSP, PS3) use different files and are not supported.
 
 ## How it works

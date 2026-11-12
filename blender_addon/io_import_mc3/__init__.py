@@ -16,7 +16,8 @@ import bpy
 from bpy.props import BoolProperty, EnumProperty, FloatProperty, StringProperty
 from bpy_extras.io_utils import ImportHelper
 
-from .mc3tools import game, scene as mc3scene, vehicle as mc3vehicle
+from .mc3tools import game, scene as mc3scene, textures as mc3textures, vehicle as mc3vehicle
+from .mc3tools.xiso import safe_join
 
 # Traffic vehicles (vehicle/va_*) present in MC3 Remix.
 VEHICLES = (
@@ -55,21 +56,44 @@ WEATHER_ITEMS = [("clear", "Clear", ""), ("cloudy", "Cloudy", ""), ("rainy", "Ra
 ADDITIVE_SHADERS = {5}  # glows/halos (fx_tailblast, ceilinglight)
 # What each material's alpha means (cutout, blend or nothing) comes from
 # mc3tools: Material.alpha / Material.alpha_cutoff.
-ENVMAP = "__envmap__"  # glass/chrome: environment reflection, no texture of its own
-GLASS_COLOR = (0.03, 0.035, 0.04, 1.0)
-GLASS_ALPHA = 0.8
+# ambient_chrome (tanks, fuel tanks, bumpers): opaque environment reflection,
+# no texture of its own. Approximated as a light, glossy metal.
+ENVMAP = "__envmap__"
+CHROME_COLOR = (0.8, 0.8, 0.8, 1.0)
+CHROME_ROUGHNESS = 0.25
+FLOOR_ROUGHNESS = 0.1  # reflecting garage floor
 
 
 # --- textures -------------------------------------------------------------
-def make_image(tex, prefix):
-    img = bpy.data.images.new(prefix + tex.name, tex.width, tex.height, alpha=True)
-    w, h, src = tex.width, tex.height, tex.rgba
-    row = w * 4
-    # Blender stores rows bottom to top.
-    flipped = b"".join(src[(h - 1 - y) * row:(h - y) * row] for y in range(h))
-    img.pixels.foreach_set([c / 255.0 for c in flipped])
-    img.pack()
-    img.use_fake_user = False
+def texture_folder(setting, source, label):
+    """Where the PNGs go: the chosen folder, next to the .blend, or next to the game files."""
+    if setting:
+        base = bpy.path.abspath(setting)
+    elif bpy.data.filepath:
+        base = bpy.path.abspath("//mc3_textures")
+    else:
+        base = os.path.join(os.path.dirname(os.path.abspath(source)), "mc3_textures")
+    return os.path.join(base, label)
+
+
+def make_image(tex, prefix, folder):
+    # Saved as a real PNG and not packed, so exporters (OBJ, FBX...) can
+    # reference and copy it. File › External Data › Pack Resources makes the
+    # .blend self-contained if needed.
+    path = safe_join(folder, tex.name + ".png")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    mc3textures.write_png(path, tex.rgba, tex.width, tex.height)
+    img = bpy.data.images.load(path, check_existing=False)
+    img.name = prefix + tex.name
+    # The alpha is often not transparency (reflection amount, masks...) and the
+    # materials use it explicitly. Without this, Cycles premultiplies and turns
+    # the color black wherever alpha is 0.
+    img.alpha_mode = "CHANNEL_PACKED"
+    if bpy.data.filepath:
+        try:
+            img.filepath = bpy.path.relpath(path)
+        except ValueError:  # different drive: keep the absolute path
+            pass
     return img
 
 
@@ -96,14 +120,13 @@ def make_material(m, images, prefix, opts):
     x = -700
     color = None
     alpha = None
-    glass = m.diffuse == ENVMAP
-    if glass:
+    tex_alpha = None  # raw texture alpha, for exporters
+    reflect = None  # reflecting floor: texture alpha = reflection amount
+    chrome = m.diffuse == ENVMAP
+    if chrome:
         rgb = nodes.new("ShaderNodeRGB")
-        rgb.outputs[0].default_value, rgb.location, rgb.label = GLASS_COLOR, (x, 200), "Glass"
+        rgb.outputs[0].default_value, rgb.location, rgb.label = CHROME_COLOR, (x, 200), "Chrome"
         color = rgb.outputs[0]
-        val = nodes.new("ShaderNodeValue")
-        val.outputs[0].default_value, val.location, val.label = GLASS_ALPHA, (x, 0), "Opacity"
-        alpha = val.outputs[0]
     elif m.diffuse in images:
         uv = nodes.new("ShaderNodeUVMap")
         uv.uv_map, uv.location = "UVMap", (x - 250, 200)
@@ -111,6 +134,10 @@ def make_material(m, images, prefix, opts):
         tex.image, tex.location, tex.label = images[m.diffuse], (x, 200), "Diffuse"
         links.new(uv.outputs["UV"], tex.inputs["Vector"])
         color = tex.outputs["Color"]
+        if m.alpha in ("MASK", "BLEND"):
+            tex_alpha = tex.outputs["Alpha"]
+        elif m.alpha == "REFLECT" and opts.get("floor_reflection", 0) > 0:
+            reflect = tex.outputs["Alpha"]
         if m.alpha == "MASK":
             cut = nodes.new("ShaderNodeMath")
             cut.operation, cut.location, cut.label = "GREATER_THAN", (x + 300, 350), "Cutout"
@@ -131,6 +158,7 @@ def make_material(m, images, prefix, opts):
         links.new(b, mix.inputs["B"])
         return mix.outputs["Result"]
 
+    base_color = color
     if opts["mode"] == "BAKED":
         # Precomputed lighting = lightmap (UV 1) × vertex color. On lightmapped
         # objects the vertex color is white; on loose props it carries the
@@ -168,16 +196,37 @@ def make_material(m, images, prefix, opts):
         shader = nodes.new("ShaderNodeBsdfPrincipled")
         if color is not None:
             links.new(color, shader.inputs["Base Color"])
-        shader.inputs["Roughness"].default_value = 0.8
+        shader.inputs["Roughness"].default_value = CHROME_ROUGHNESS if chrome else 0.8
+        if chrome:
+            shader.inputs["Metallic"].default_value = 1.0
     shader.location = (300, 0)
     final = shader.outputs[0]
+
+    if reflect is not None:
+        # The game blends a mirrored copy of the room over the floor by the
+        # texture alpha. Here a real glossy reflection does the same job, and
+        # also reflects whatever you add to the scene (e.g. a car).
+        amount = nodes.new("ShaderNodeMath")
+        amount.operation, amount.use_clamp, amount.location = "MULTIPLY", True, (x + 300, 600)
+        amount.label = "Floor reflection"
+        links.new(reflect, amount.inputs[0])
+        amount.inputs[1].default_value = opts["floor_reflection"]
+        gloss = nodes.new("ShaderNodeBsdfGlossy")
+        gloss.location = (300, -350)
+        gloss.inputs["Roughness"].default_value = FLOOR_ROUGHNESS
+        mirror = nodes.new("ShaderNodeMixShader")
+        mirror.location = (500, -100)
+        links.new(amount.outputs[0], mirror.inputs["Fac"])
+        links.new(final, mirror.inputs[1])
+        links.new(gloss.outputs[0], mirror.inputs[2])
+        final = mirror.outputs[0]
 
     if additive:
         transp = nodes.new("ShaderNodeBsdfTransparent")
         transp.location = (300, -200)
         add = nodes.new("ShaderNodeAddShader")
         add.location = (600, 0)
-        links.new(shader.outputs[0], add.inputs[0])
+        links.new(final, add.inputs[0])
         links.new(transp.outputs[0], add.inputs[1])
         final = add.outputs[0]
         _set_alpha_mode(mat, True)
@@ -188,10 +237,36 @@ def make_material(m, images, prefix, opts):
         mix.location = (600, 0)
         links.new(alpha, mix.inputs["Fac"])
         links.new(transp.outputs[0], mix.inputs[1])
-        links.new(shader.outputs[0], mix.inputs[2])
+        links.new(final, mix.inputs[2])
         final = mix.outputs[0]
-        _set_alpha_mode(mat, m.alpha == "BLEND" or glass)
-    links.new(final, out.inputs["Surface"])
+        _set_alpha_mode(mat, m.alpha == "BLEND")
+
+    if final == shader.outputs[0] and shader.bl_idname == "ShaderNodeBsdfPrincipled":
+        links.new(final, out.inputs["Surface"])
+        return mat
+
+    # Exporters (OBJ, FBX, glTF) only understand a Principled BSDF plugged
+    # straight into the output. Cycles and EEVEE use their own outputs, so the
+    # render is unchanged; the "All" output gets a plain Principled for export.
+    out.target, out.label = "ALL", "For exporters"
+    out.location = (900, 450)
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location, bsdf.label = (600, 450), "For exporters"
+    if base_color is not None:
+        links.new(base_color, bsdf.inputs["Base Color"])
+    if tex_alpha is not None:
+        links.new(tex_alpha, bsdf.inputs["Alpha"])
+    bsdf.inputs["Roughness"].default_value = CHROME_ROUGHNESS if chrome else 0.8
+    if chrome:
+        bsdf.inputs["Metallic"].default_value = 1.0
+    if (additive or glow) and base_color is not None:
+        links.new(base_color, bsdf.inputs["Emission Color"])
+        bsdf.inputs["Emission Strength"].default_value = 1.0
+    links.new(bsdf.outputs[0], out.inputs["Surface"])
+    for i, target in enumerate(("CYCLES", "EEVEE")):
+        o = nodes.new("ShaderNodeOutputMaterial")
+        o.target, o.location = target, (900, -150 * i)
+        links.new(final, o.inputs["Surface"])
     return mat
 
 
@@ -237,9 +312,9 @@ def build_mesh(mesh, materials):
     return me
 
 
-def import_scene(context, sc, label, opts):
+def import_scene(context, sc, label, opts, folder):
     prefix = label + "_"
-    images = {name: make_image(t, prefix) for name, t in sc.textures.items()}
+    images = {name: make_image(t, prefix, folder) for name, t in sc.textures.items()}
 
     coll = bpy.data.collections.new(label)
     context.scene.collection.children.link(coll)
@@ -260,6 +335,9 @@ def import_scene(context, sc, label, opts):
         ob = bpy.data.objects.new(mesh.name, me)
         ob.parent = root
         coll.objects.link(ob)
+        if opts.get("hide_reflection") and mc3scene.REFLECTION_MESH in mesh.name:
+            ob.hide_set(True)
+            ob.hide_render = True
     return root
 
 
@@ -285,6 +363,10 @@ class ShadingOptions:
     light_strength: FloatProperty(name="Lighting strength", default=2.0, min=0.0, max=8.0,
                                   description="Multiplies lightmap and vertex color (the Xbox uses 2×)")
     vertex_colors: _vertex_colors_prop(True)
+    texture_dir: StringProperty(name="Texture folder", subtype="DIR_PATH", default="",
+                                description="Where the textures are saved as PNG (needed to export to "
+                                            "OBJ, FBX...). Empty: mc3_textures next to the .blend, or "
+                                            "next to the game files if the .blend is not saved yet")
 
     def draw_shading(self, lay):
         lay.prop(self, "mode")
@@ -292,10 +374,22 @@ class ShadingOptions:
         col.enabled = self.mode == "BAKED"
         col.prop(self, "light_strength")
         col.prop(self, "vertex_colors")
+        lay.prop(self, "texture_dir")
 
     def shading_opts(self):
         return {"mode": self.mode, "light_strength": self.light_strength,
                 "vertex_colors": self.vertex_colors}
+
+    def import_into(self, context, sc, label):
+        folder = texture_folder(self.texture_dir, self.filepath, label)
+        try:
+            import_scene(context, sc, label, self.shading_opts(), folder)
+        except OSError as exc:
+            self.report({"ERROR"}, "Could not save textures to %s: %s" % (folder, exc))
+            return {"CANCELLED"}
+        self.report({"INFO"}, "%s: %d meshes, %d textures (saved to %s)" % (
+            label, len(sc.meshes), len(sc.textures), folder))
+        return {"FINISHED"}
 
 
 class IMPORT_SCENE_OT_mc3_xbck(bpy.types.Operator, ImportHelper, ShadingOptions):
@@ -311,6 +405,12 @@ class IMPORT_SCENE_OT_mc3_xbck(bpy.types.Operator, ImportHelper, ShadingOptions)
                        description="Used when opening the ISO or an assets_x.dat")
     time: EnumProperty(name="Time of day", items=TIME_ITEMS, default="midnight")
     weather: EnumProperty(name="Weather", items=WEATHER_ITEMS, default="clear")
+    floor_reflection: FloatProperty(name="Floor reflection", default=1.0, min=0.0, max=4.0,
+                                    description="Multiplies the floor's reflection amount (stored in the "
+                                                "texture alpha). 0 = matte floor")
+    hide_reflection: BoolProperty(name="Hide game reflection copy", default=True,
+                                  description="Hide the mirrored copy of the room under the floor, which "
+                                              "the game uses to fake reflections")
 
     def draw(self, context):
         lay = self.layout
@@ -320,6 +420,12 @@ class IMPORT_SCENE_OT_mc3_xbck(bpy.types.Operator, ImportHelper, ShadingOptions)
         box.prop(self, "time")
         box.prop(self, "weather")
         self.draw_shading(lay)
+        lay.prop(self, "floor_reflection")
+        lay.prop(self, "hide_reflection")
+
+    def shading_opts(self):
+        return dict(super().shading_opts(), floor_reflection=self.floor_reflection,
+                    hide_reflection=self.hide_reflection)
 
     def execute(self, context):
         path = self.filepath
@@ -338,9 +444,7 @@ class IMPORT_SCENE_OT_mc3_xbck(bpy.types.Operator, ImportHelper, ShadingOptions)
         except Exception as exc:  # noqa: BLE001 - shown to the user
             self.report({"ERROR"}, "Failed to read %s: %s" % (os.path.basename(path), exc))
             return {"CANCELLED"}
-        import_scene(context, sc, label, self.shading_opts())
-        self.report({"INFO"}, "%s: %d meshes, %d textures" % (label, len(sc.meshes), len(sc.textures)))
-        return {"FINISHED"}
+        return self.import_into(context, sc, label)
 
 
 class IMPORT_SCENE_OT_mc3_vehicle(bpy.types.Operator, ImportHelper, ShadingOptions):
@@ -378,9 +482,7 @@ class IMPORT_SCENE_OT_mc3_vehicle(bpy.types.Operator, ImportHelper, ShadingOptio
         except Exception as exc:  # noqa: BLE001 - shown to the user
             self.report({"ERROR"}, "Failed to read %s: %s" % (self.vehicle, exc))
             return {"CANCELLED"}
-        import_scene(context, sc, self.vehicle, self.shading_opts())
-        self.report({"INFO"}, "%s: %d meshes, %d textures" % (self.vehicle, len(sc.meshes), len(sc.textures)))
-        return {"FINISHED"}
+        return self.import_into(context, sc, self.vehicle)
 
 
 def _make_vehicle_menu(index, label, fragments):

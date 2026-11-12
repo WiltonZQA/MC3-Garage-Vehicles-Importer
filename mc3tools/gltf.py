@@ -65,13 +65,17 @@ def export_glb(scene, path, lightmaps=True):
              "extras": {"mc3_shader": mat.shader, "mc3_diffuse": mat.diffuse, "mc3_lightmap": mat.lightmap}}
         if mat.diffuse in tex_index:
             m["pbrMetallicRoughness"]["baseColorTexture"] = {"index": tex_index[mat.diffuse], "texCoord": 0}
-            m["alphaMode"] = mat.alpha
+            if mat.alpha in ("MASK", "BLEND"):
+                m["alphaMode"] = mat.alpha
+            elif mat.alpha == "REFLECT":
+                # Reflecting floor: opaque and glossier (glTF has no per-texel reflection amount)
+                m["pbrMetallicRoughness"]["roughnessFactor"] = 0.4
             if mat.alpha == "MASK":
                 m["alphaCutoff"] = mat.alpha_cutoff
         elif mat.diffuse == "__envmap__":
-            # glass/chrome without a texture of its own (environment reflection in game)
-            m["pbrMetallicRoughness"].update(baseColorFactor=[0.03, 0.035, 0.04, 0.8], roughnessFactor=0.1)
-            m["alphaMode"] = "BLEND"
+            # ambient_chrome: opaque environment reflection with no texture of its own
+            m["pbrMetallicRoughness"].update(baseColorFactor=[0.8, 0.8, 0.8, 1.0],
+                                             metallicFactor=1.0, roughnessFactor=0.25)
         if mat.lightmap and lightmaps:
             m["occlusionTexture"] = {"index": tex_index[mat.lightmap], "texCoord": 1}
         gl["materials"].append(m)

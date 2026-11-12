@@ -5,6 +5,7 @@
 assets_x.dat*
 extracted/
 output/
+mc3_textures/
 
 # Build artifacts (publish the zip as a GitHub Release asset instead)
 dist/
