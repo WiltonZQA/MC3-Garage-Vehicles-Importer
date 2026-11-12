@@ -3,7 +3,7 @@
 bl_info = {
     "name": "Midnight Club 3 Importer (.xbck / Xbox ISO)",
     "author": "MC3 Importer contributors",
-    "version": (1, 0, 0),
+    "version": (1, 1, 0),
     "blender": (4, 1, 0),
     "location": "File > Import > Midnight Club 3",
     "description": "Imports garages and traffic vehicles from MC3 Remix (Xbox) with textures and lightmaps",
